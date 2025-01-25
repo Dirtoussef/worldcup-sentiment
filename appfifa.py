@@ -14,8 +14,17 @@ st.set_page_config(layout="wide")
 
 @st.cache_data
 def load_data():
-    # Charger uniquement les colonnes nécessaires
-    Fifa = pd.read_csv("data/FIFA.csv")
+    # Define the chunk size
+    chunk_size = 100000  # Adjust the chunk size as needed
+    chunks = []
+    
+    # Load the CSV file in chunks
+    for chunk in pd.read_csv("data/FIFA.csv", chunksize=chunk_size):
+        chunks.append(chunk)
+    
+    # Concatenate all chunks into a single DataFrame
+    Fifa = pd.concat(chunks, ignore_index=True)
+    
     
     # Appliquer la logique de classification des pays
     country_mapping = {

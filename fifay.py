@@ -356,6 +356,8 @@ def plot_selected_graph(graph_type, Fifa_clean):
         plt.xlabel("Total des Retweets")
         plt.ylabel("Utilisateur")
         plt.xticks(rotation=45)
+        # Remove exponential notation
+        plt.gca().get_xaxis().get_major_formatter().set_scientific(False)
     
     elif graph_type == "Top Sources par Nombre de Tweets":
         data = prepare_top_sources(Fifa_clean)
@@ -386,6 +388,19 @@ with col1:
 with col2:
     st.subheader("Top Hashtags")
     plot_top_hashtags(top_hashtags, metric, color_palette)
+
+def load_data():
+    # Define the chunk size
+    chunk_size = 100000  # Adjust the chunk size as needed
+    chunks = []
+    
+    # Load the CSV file in chunks
+    for chunk in pd.read_csv("data/FIFA.csv", chunksize=chunk_size):
+        chunks.append(chunk)
+    
+    # Concatenate all chunks into a single DataFrame
+    Fifa = pd.concat(chunks, ignore_index=True)
+    return Fifa
 
 
 
