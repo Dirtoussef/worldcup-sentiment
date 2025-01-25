@@ -1,5 +1,5 @@
 ﻿altair==5.5.0
-wordcloud==1.9.3
+
 asgiref==3.8.1
 asttokens==2.4.1
 attrs==23.2.0
