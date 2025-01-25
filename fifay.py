@@ -37,7 +37,7 @@ def classify_phases(Fifa_clean):
         "Huitièmes de finale" if huitieme_debut <= pd.to_datetime(x) <= huitieme_fin else
         "Quarts de finale" if huitieme_fin < pd.to_datetime(x) < demi_debut else
         "Demi-finales" if demi_debut <= pd.to_datetime(x) <= demi_fin else
-        "Finale" if pd.to_datetime(x) == finale else "Tous"
+        "Finale" if pd.to_datetime(x) >= finale else "Tous"
     )
     return Fifa_clean
 
