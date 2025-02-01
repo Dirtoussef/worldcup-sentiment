@@ -4,27 +4,18 @@ from PIL import Image
 import requests
 import re
 from collections import defaultdict
-
+import pyarrow.parquet as pq
 
 # Activer le mode large
 st.set_page_config(layout="wide")
 
-
-
-
-@st.cache_data
+@st.cache_data(hash_funcs={pd.DataFrame: lambda _: None})
 def load_data():
-    # Define the chunk size
-    chunk_size = 100000  # Adjust the chunk size as needed
-    chunks = []
+    # Load the Parquet file
+    Fifa = pq.read_table("data/FIFA.parquet", columns=None).to_pandas()
     
-    # Load the CSV file in chunks
-    for chunk in pd.read_csv("data/FIFA.csv", chunksize=chunk_size):
-        chunks.append(chunk)
-    
-    # Concatenate all chunks into a single DataFrame
-    Fifa = pd.concat(chunks, ignore_index=True)
-    
+    # Limit to the first 100,000 rows
+    Fifa = Fifa.iloc[:1000000]
     
     # Appliquer la logique de classification des pays
     country_mapping = {

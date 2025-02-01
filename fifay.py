@@ -9,20 +9,11 @@ from wordcloud import WordCloud
 import numpy as np
 import seaborn as sns
 
-# Charger les données et les mettre en cache
-@st.cache_data
-def load_data_wrapper():
-    return load_data()
-
-# Charger les données
-Fifa_clean, country_coords = load_data_wrapper()
-
-# Titre de l'application
-st.title("Analyse des Tweets de la Coupe du Monde FIFA 2018")
-
-# Ajouter un filtre pour les phases dans la sidebar
-with st.sidebar:
-    selected_phase = st.selectbox("Sélectionnez une phase", phases, key="phase_selectbox")
+# Initialize session state
+if 'data_loaded' not in st.session_state:
+    st.session_state['data_loaded'] = False
+if 'country_coords' not in st.session_state:
+    st.session_state['country_coords'] = None
 
 # Classer les tweets par phase du tournoi
 @st.cache_data
@@ -37,58 +28,77 @@ def classify_phases(Fifa_clean):
         "Huitièmes de finale" if huitieme_debut <= pd.to_datetime(x) <= huitieme_fin else
         "Quarts de finale" if huitieme_fin < pd.to_datetime(x) < demi_debut else
         "Demi-finales" if demi_debut <= pd.to_datetime(x) <= demi_fin else
-        "Finale" if pd.to_datetime(x) == finale else "Tous"
+        "Finale" if pd.to_datetime(x) >= finale else "Tous"
     )
     return Fifa_clean
-
-# Appliquer la classification des phases
-Fifa_clean = classify_phases(Fifa_clean)
 
 # Calculer le sentiment des tweets
 def calculate_sentiment(text):
     analysis = TextBlob(str(text))
     return analysis.sentiment.polarity    
 
-Fifa_clean['Sentiment'] = Fifa_clean['Tweet'].apply(calculate_sentiment)
-
 # Ajouter une colonne pour la catégorie de sentiment
-Fifa_clean['Sentiment_Category'] = Fifa_clean['Sentiment'].apply(
-    lambda x: "Positif" if x > 0.05 else ("Négatif" if x < -0.05 else "Neutre")
-)
+def categorize_sentiment(polarity):
+    return "Positif" if polarity > 0.05 else ("Négatif" if polarity < -0.05 else "Neutre")
 
 # Pré-calculer et mettre en cache les données filtrées pour chaque phase
 @st.cache_data
-def precompute_filtered_data(Fifa_clean, country_coords):
+def precompute_filtered_data(Fifa_clean):
+    Fifa_clean['Sentiment'] = Fifa_clean['Tweet'].apply(calculate_sentiment)
+    Fifa_clean['Sentiment_Category'] = Fifa_clean['Sentiment'].apply(categorize_sentiment)
+    
     filtered_data_dict = {}
+    phases = ["Tous", "Huitièmes de finale", "Quarts de finale", "Demi-finales", "Finale"]
+    
     for phase in phases:
         if phase == "Tous":
-            filtered_data = Fifa_clean  # Utiliser toutes les données pour "Tous"
+            phase_data = Fifa_clean
         else:
-            filtered_data = Fifa_clean[Fifa_clean['Phase'] == phase]
-
-        tweet_count_filtered = filtered_data['Country'].value_counts().reset_index()
-        tweet_count_filtered.columns = ['Country', 'Tweet_Count']
-        tweet_count_filtered['latitude'] = tweet_count_filtered['Country'].apply(
-            lambda x: country_coords.get(x, (None, None))[0]
-        )
-        tweet_count_filtered['longitude'] = tweet_count_filtered['Country'].apply(
-            lambda x: country_coords.get(x, (None, None))[1]
-        )
+            phase_data = Fifa_clean[Fifa_clean['Phase'] == phase]
         
-        sentiment_by_country = filtered_data.groupby('Country')['Sentiment'].mean().reset_index()
-        sentiment_by_country.columns = ['Country', 'Sentiment_Mean']
-        sentiment_category_filtered = filtered_data['Sentiment_Category'].value_counts()
+        tweet_count_filtered = phase_data.groupby('Country').size().reset_index(name='Tweet_Count')
+        sentiment_category_filtered = phase_data.groupby('Sentiment_Category').size().reset_index(name='Count')
+        sentiment_by_country = phase_data.groupby('Country')['Sentiment'].mean().reset_index(name='Sentiment_Mean')
         
-        # Ajouter les données au dictionnaire
-        filtered_data_dict[phase] = (tweet_count_filtered, sentiment_category_filtered, sentiment_by_country)
-        
+        filtered_data_dict[phase] = {
+            'tweet_count_filtered': tweet_count_filtered,
+            'sentiment_category_filtered': sentiment_category_filtered,
+            'sentiment_by_country': sentiment_by_country,
+            'phase_data': phase_data
+        }
+    
     return filtered_data_dict
 
-# Charger les données filtrées pré-calculées
-filtered_data_dict = precompute_filtered_data(Fifa_clean, country_coords)
+# Charger les données et les mettre en cache
+@st.cache_data(hash_funcs={pd.DataFrame: lambda _: None})
+def load_data_wrapper():
+    Fifa_clean, country_coords = load_data()
+    Fifa_clean = classify_phases(Fifa_clean)
+    return precompute_filtered_data(Fifa_clean), country_coords
 
-# Filtrer les données en fonction de la phase sélectionnée
-tweet_count_filtered, sentiment_category_filtered, sentiment_by_country = filtered_data_dict[selected_phase]
+# Charger les données
+if not st.session_state['data_loaded']:
+    filtered_data_dict, country_coords = load_data_wrapper()
+    st.session_state['data_loaded'] = True
+    st.session_state['filtered_data_dict'] = filtered_data_dict
+    st.session_state['country_coords'] = country_coords
+else:
+    filtered_data_dict = st.session_state['filtered_data_dict']
+    country_coords = st.session_state['country_coords']
+
+# Titre de l'application
+st.title("Analyse des Tweets de la Coupe du Monde FIFA 2018")
+
+# Ajouter un filtre pour les phases dans la sidebar
+with st.sidebar:
+    selected_phase = st.selectbox("Sélectionnez une phase", phases, key="phase_selectbox")
+
+# Accès aux données via session_state
+filtered_data = filtered_data_dict[selected_phase]
+tweet_count_filtered = filtered_data['tweet_count_filtered']
+sentiment_category_filtered = filtered_data['sentiment_category_filtered']
+sentiment_by_country = filtered_data['sentiment_by_country']
+phase_data = filtered_data['phase_data']
 
 # Convertir tweet_count_filtered en un dictionnaire pour une recherche facile
 tweet_data = dict(zip(tweet_count_filtered['Country'], tweet_count_filtered['Tweet_Count']))
@@ -96,26 +106,12 @@ tweet_data = dict(zip(tweet_count_filtered['Country'], tweet_count_filtered['Twe
 # Ajouter le sentiment moyen par pays dans le dictionnaire
 sentiment_data = dict(zip(sentiment_by_country['Country'], sentiment_by_country['Sentiment_Mean']))
 
-# Définir filtered_data globalement
-if selected_phase == "Tous":
-    filtered_data = Fifa_clean  # Utiliser toutes les données pour "Tous"
-else:
-    filtered_data = Fifa_clean[Fifa_clean['Phase'] == selected_phase]
-
 # Paramètres du Word Cloud
 st.sidebar.header("Paramètres du Word Cloud")
 min_freq = st.sidebar.slider("Fréquence minimale des mots", min_value=1, max_value=100, value=2)
 max_words = st.sidebar.slider("Nombre maximal de mots", min_value=1, max_value=300, value=100)
 
-
-def generate_wordcloud(data, phase, min_freq, max_words):
-    # Filtrer les données en fonction de la phase sélectionnée
-    if phase != "Tous":
-        data = data[data['Phase'] == phase]
-    else:
-            a = Fifa_clean[Fifa_clean['Phase'] == selected_phase]
-    
-    
+def generate_wordcloud(data, min_freq, max_words):
     # Nettoyer les données : supprimer les NaN et convertir en str
     data_cleaned = data.dropna(subset=['Tweet'])  # Supprimer les lignes avec des tweets manquants
     data_cleaned['Tweet'] = data_cleaned['Tweet'].astype(str)  # Convertir en chaînes de caractères
@@ -168,8 +164,9 @@ with st.sidebar:
     color_palette = st.selectbox("Choisir la palette de couleurs", ["Spectral", "Set1", "Set2", "Set3", "Pastel1", "Pastel2"], key="color_palette_selectbox")
 
 # Préparer les données pour les hashtags
-def prepare_hashtag_data(Fifa_clean):
-    data_hashtags = Fifa_clean[Fifa_clean['Hashtags'] != ""].copy()
+@st.cache_data
+def prepare_hashtag_data(phase_data):
+    data_hashtags = phase_data[phase_data['Hashtags'] != ""].copy()
     data_hashtags['Hashtags'] = data_hashtags['Hashtags'].str.split(',')
     data_hashtags = data_hashtags.explode('Hashtags')
     data_hashtags['Hashtags'] = data_hashtags['Hashtags'].str.strip()
@@ -184,7 +181,7 @@ def prepare_hashtag_data(Fifa_clean):
     return hashtag_stats
 
 # Charger les données des hashtags
-hashtag_stats = prepare_hashtag_data(Fifa_clean)
+hashtag_stats = prepare_hashtag_data(phase_data)
 
 # Filtrer les données en fonction des choix de l'utilisateur
 if metric == "Likes":
@@ -202,27 +199,28 @@ with st.sidebar:
     )
 
 # Fonction pour préparer les données des influenceurs par retweets
-def prepare_top_retweets_users(Fifa_clean):
-    top_retweets_users = Fifa_clean.groupby('UserMentionNames').agg(
+@st.cache_data
+def prepare_top_retweets_users(phase_data):
+    top_retweets_users = phase_data.groupby('UserMentionNames').agg(
         Total_retweets=('RTs', 'sum')
     ).reset_index().nlargest(10, 'Total_retweets')
     return top_retweets_users
 
 # Fonction pour préparer les données des sources par nombre de tweets
-def prepare_top_sources(Fifa_clean):
-    top_sources = Fifa_clean.groupby('Source_Cleaned').agg(
+@st.cache_data
+def prepare_top_sources(phase_data):
+    top_sources = phase_data.groupby('Source_Cleaned').agg(
         Total_tweets=('Source_Cleaned', 'size')
     ).reset_index().nlargest(10, 'Total_tweets')
     return top_sources
 
 # Fonction pour préparer les données des utilisateurs par followers
-def prepare_top_users_by_followers(Fifa_clean):
-    top_users_by_followers = Fifa_clean.groupby('UserMentionNames').agg(
+@st.cache_data
+def prepare_top_users_by_followers(phase_data):
+    top_users_by_followers = phase_data.groupby('UserMentionNames').agg(
         Total_followers=('Followers', 'max')
     ).reset_index().nlargest(10, 'Total_followers')
     return top_users_by_followers
-
-
 
 # Charger le fichier GeoJSON des pays
 url = "https://raw.githubusercontent.com/johan/world.geo.json/master/countries.geo.json"
@@ -233,7 +231,6 @@ try:
 except requests.exceptions.RequestException as e:
     st.error(f"Erreur lors du chargement du fichier GeoJSON: {e}")
     st.stop()
-
 
 # Générer le code HTML/JavaScript pour Leaflet
 html_code = """
@@ -323,21 +320,16 @@ html_code = """
         style: style,
         onEachFeature: onEachFeature
     }).addTo(map);
-
-    
 </script>
 """
 
 # Afficher la carte dans Streamlit
 st.components.v1.html(html_code, height=500)
 
-
-
-
 # Afficher le Word Cloud
 st.header("Nuage de Mots")
 fig, ax = plt.subplots(figsize=(10, 5))
-wordcloud = generate_wordcloud(filtered_data, selected_phase, min_freq, max_words)
+wordcloud = generate_wordcloud(phase_data, min_freq, max_words)
 if wordcloud:
     ax.imshow(wordcloud, interpolation='bilinear')
     ax.axis("off")
@@ -345,11 +337,10 @@ if wordcloud:
 else:
     st.write("Aucun mot à afficher dans le nuage de mots.")
 
-
 # Fonction pour afficher le graphique sélectionné
-def plot_selected_graph(graph_type, Fifa_clean):
+def plot_selected_graph(graph_type, phase_data):
     if graph_type == "Top Influenceurs par Retweets":
-        data = prepare_top_retweets_users(Fifa_clean)
+        data = prepare_top_retweets_users(phase_data)
         plt.figure(figsize=(12, 8))
         sns.barplot(x='Total_retweets', y='UserMentionNames', data=data, palette='Set3')
         plt.title("Top 10 Influenceurs par Retweets")
@@ -360,7 +351,7 @@ def plot_selected_graph(graph_type, Fifa_clean):
         plt.gca().get_xaxis().get_major_formatter().set_scientific(False)
     
     elif graph_type == "Top Sources par Nombre de Tweets":
-        data = prepare_top_sources(Fifa_clean)
+        data = prepare_top_sources(phase_data)
         plt.figure(figsize=(12, 8))
         sns.barplot(x='Total_tweets', y='Source_Cleaned', data=data, palette='Pastel1')
         plt.title("Top Sources par Nombre de Tweets")
@@ -368,7 +359,7 @@ def plot_selected_graph(graph_type, Fifa_clean):
         plt.ylabel("Source")
     
     elif graph_type == "Top Utilisateurs par Followers":
-        data = prepare_top_users_by_followers(Fifa_clean)
+        data = prepare_top_users_by_followers(phase_data)
         plt.figure(figsize=(12, 8))
         sns.barplot(x='Total_followers', y='UserMentionNames', data=data, palette='Set3')
         plt.title("Top Utilisateurs par Followers")
@@ -383,7 +374,7 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("Top Influenceurs")
-    plot_selected_graph(graph_type, Fifa_clean)  # Call the correct function
+    plot_selected_graph(graph_type, phase_data)  # Call the correct function
 
 with col2:
     st.subheader("Top Hashtags")
@@ -393,16 +384,18 @@ def load_data():
     # Define the chunk size
     chunk_size = 100000  # Adjust the chunk size as needed
     chunks = []
+    total_rows = 0
+    max_rows = 100000  # Limit the total number of rows to 100,000
     
     # Load the CSV file in chunks
     for chunk in pd.read_csv("data/FIFA.csv", chunksize=chunk_size):
+        if total_rows + len(chunk) > max_rows:
+            remaining_rows = max_rows - total_rows
+            chunks.append(chunk.iloc[:remaining_rows])
+            break
         chunks.append(chunk)
+        total_rows += len(chunk)
     
     # Concatenate all chunks into a single DataFrame
     Fifa = pd.concat(chunks, ignore_index=True)
     return Fifa
-
-
-
-
-
